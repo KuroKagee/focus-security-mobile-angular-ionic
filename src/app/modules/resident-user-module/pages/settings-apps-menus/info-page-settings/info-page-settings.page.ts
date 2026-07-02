@@ -126,7 +126,7 @@ export class InfoPageSettingsPage extends ApiService implements OnInit {
   onClick(is_reload: boolean = false) {
     this.route.navigate(['/app-report-main'], {
       state: {
-        fromWhere: 'app-report',
+        fromWhere: 'setting-app-report',
       }
     });
   }

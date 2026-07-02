@@ -61,6 +61,7 @@ export class RegisterResidentPage implements OnInit {
   Block: any[] = [];
   Unit: any[] = [];
   project_id: number = 0;
+  isErrorNumber: Boolean = false;
 
   formData = {
     full_name: '',
@@ -86,6 +87,24 @@ export class RegisterResidentPage implements OnInit {
 
   onUnitChange(event: any) {
     this.formData.unit = event.target.value;
+  }
+
+  checkValidNum(event: string){
+    const country = this.countryCodes.find(c => c.code === this.selectedCode)
+    const value = event
+    if (value === '') {
+      this.isErrorNumber = true
+      this.functionMain.presentToast('Mobile Number is required!', 'danger')
+    } else if (value.length < country.minDigit) {
+      this.isErrorNumber = true
+      this.functionMain.presentToast('Mobile Number should be atleast ' + country.minDigit + ' digit!', 'danger')
+    } else if (value.length > country.maxDigit) {
+      this.isErrorNumber = true
+      this.functionMain.presentToast('Mobile Number must not exceed ' + country.maxDigit + ' digit!', 'danger')
+    }
+    else {
+      this.isErrorNumber = false
+    }
   }
 
   loadBlock() {
@@ -125,14 +144,23 @@ export class RegisterResidentPage implements OnInit {
   onCountryCodeChange(event: any): void {
     console.log(event)
     this.selectedCode = event.target.value;
-    
+    this.checkValidNum(this.formData.mobile_number)
   }
 
   onChangeMobileNumber(event: any) {
-    this.formData.mobile_number = event.target.value
+    const value = event.target.value
+    this.checkValidNum(value)
+    if (this.isErrorNumber === false) {
+      this.formData.mobile_number = event.target.value
+    }
   }
 
   async onSubmitRegister() {
+    if (this.isErrorNumber){
+      this.functionMain.presentToast('Please enter a valid Mobile Number!', 'danger')
+      return;
+    }
+
     console.log(this.formData)
     let errMsg = ""
     if (!this.formData.full_name) {

@@ -82,13 +82,26 @@ export class AppReportMainPage implements OnInit {
 
   handleRefresh(event: any) {
     this.isLoading = true;
-    if (this.fromWhere === 'app-report') {
+    if (this.fromWhere === 'setting-app-report') {
       setTimeout(() => {
         this.pageName = 'Report App Issue';
         this.loadTicketFromBackendFor(this.fromWhere);
         this.loadTypeFor(this.fromWhere);
         event.target.complete();
+        this.showBackButton = true;
+        this.showRecord = false;
+        this.showForm = true;
+        this.navButtons[0].active = false;
+        this.navButtons[1].active = true;
+        this.subPageName = 'Report Form'
       }, 1000)
+    } else if (this.fromWhere === 'app-report'){
+      setTimeout(() => {
+        this.pageName = 'Report App Issue';
+        this.loadTicketFromBackendFor(this.fromWhere);
+        this.loadTypeFor(this.fromWhere);
+        event.target.complete();
+        }, 1000)
     } else {
       setTimeout(() => {
         this.pageName = 'Report Issue';
@@ -104,7 +117,17 @@ export class AppReportMainPage implements OnInit {
     const state = navigation?.extras.state as { fromWhere: string };
     if (state) {
       this.fromWhere = state.fromWhere;
-      if (this.fromWhere === 'app-report') {
+      if (this.fromWhere === 'setting-app-report') {
+        this.pageName = 'Report App Issue';
+        this.loadTicketFromBackendFor(this.fromWhere);
+        this.loadTypeFor(this.fromWhere);
+        this.showBackButton = true;
+        this.showRecord = false;
+        this.showForm = true;
+        this.navButtons[0].active = false;
+        this.navButtons[1].active = true;
+        this.subPageName = 'Report Form'
+      } else if (this.fromWhere === 'app-report'){
         this.pageName = 'Report App Issue';
         this.loadTicketFromBackendFor(this.fromWhere);
         this.loadTypeFor(this.fromWhere);
