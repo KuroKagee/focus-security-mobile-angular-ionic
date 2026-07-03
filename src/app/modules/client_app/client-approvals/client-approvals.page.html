@@ -700,9 +700,20 @@
         class="w-full flex flex-col justify-center items-center my-2"
         *ngIf="['family', 'employee'].includes(approval_type) && selectedApproval.image_profile"
       >
+        <p class="text-base text-black" *ngIf="selectedApproval.image_profile_pending">
+          Current Image:
+        </p>
         <img
           [src]="functionMain.getImage(selectedApproval.image_profile)"
           class="h-40"
+        />
+        <p class="text-base text-black" *ngIf="selectedApproval.image_profile_pending">
+          Proposed Image:
+        </p>
+        <img
+          [src]="functionMain.getImage(selectedApproval.image_profile_pending)"
+          class="h-40"
+          *ngIf="selectedApproval.image_profile_pending"
         />
         <p class="text-base text-black font-bold">
           {{ functionMain.returnNone(selectedApproval.family_full_name) }}
