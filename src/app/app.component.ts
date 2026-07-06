@@ -9,8 +9,15 @@ import { CheckAppVersionService } from './service/check-app-version/check-app-ve
 import { Platform } from '@ionic/angular';
 import { NotifyEndOfAgreementAndPermitService } from './service/notify-end-of-agreement-and-permit/notify-end-of-agreement-and-permit.service';
 import { CheckServerResponseService } from './service/check-server-response/check-server-response.service';
-// import { Preferences } from '@capacitor/preferences';
+import { Capacitor } from '@capacitor/core';
 
+// Pre-cache Firebase FCM token from AppDelegate so FcmTokenService can return it immediately
+if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
+  document.addEventListener('FCMTokenReceived', (e: any) => {
+    (window as any).__firebaseFCMToken = e.detail;
+    console.log('📱 app.component: Firebase FCM token pre-cached');
+  });
+}
 
 @Component({
   selector: 'app-root',

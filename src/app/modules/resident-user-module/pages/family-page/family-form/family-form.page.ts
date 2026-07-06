@@ -352,9 +352,9 @@ export class FamilyFormPage implements OnInit {
     if (this.formData.full_name == '') {
       errMsg += "Please fill member's full name! \n"
     }
-    if (this.formData.nickname == '') {
-      errMsg += "Please fill member's nickname! \n"
-    }
+    // if (this.formData.nickname == '') {
+    //   errMsg += "Please fill member's nickname! \n"
+    // }
     if (this.formData.mobile_number == '') {
       errMsg += "Please fill member's mobile number! \n"
     }

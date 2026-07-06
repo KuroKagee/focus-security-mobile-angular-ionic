@@ -70,14 +70,14 @@ export class WebRtcService extends ApiService {
   //   // { urls: 'turn:fastturn.pro:3478', 'username': 'Dendy', 'credential': 'Kepulauan_2504' },
   //   // { urls: 'turns:fastturn.pro:5349', 'username': 'Dendy', 'credential': 'Kepulauan_2504' }
   // ];
-  private iceServers: RTCIceServer[] =[
+  private iceServers: RTCIceServer[] = [
     {
-        "urls": "stun:relay17.expressturn.com:3478"
+      "urls": "stun:relay17.expressturn.com:3478"
     },
     {
-        "urls": "turn:relay17.expressturn.com:3478?transport=tcp",
-        "username": "000000002072154862",
-        "credential": "IUtn4d1i+sMuTM1lagsqrzsOBzI="
+      "urls": "turn:relay17.expressturn.com:3478?transport=tcp",
+      "username": "000000002072154862",
+      "credential": "IUtn4d1i+sMuTM1lagsqrzsOBzI="
     }
   ]
   private activeModal: HTMLIonModalElement | null = null;
@@ -103,7 +103,7 @@ export class WebRtcService extends ApiService {
   callActionStatus = new BehaviorSubject<string>('');
 
   constructor(http: HttpClient, private storage: StorageService, private toastController: ToastController, private modalController: ModalController,
-    private router: Router, 
+    private router: Router,
     private platform: Platform,
     private mainVmsService: MainVmsService
   ) {
@@ -120,12 +120,14 @@ export class WebRtcService extends ApiService {
         this.callerName = actionData.callerName;
         this.receiverName = actionData.receiverName;
         this.callerSocketId = actionData.callerSocketId;
+        this.receiverId = parseInt(actionData.receiverId, 10) || 0;
         this.callAction = actionData.callAction;
         this.callActionStatus.next(actionData.callAction);
         this.unitId = actionData.unitId;
-        // if (actionData.callAction === 'rejectCall'){
-        //   this.rejectCall();
-        // }
+        // If user tapped Decline on the iOS push notification, emit reject-call immediately
+        if (actionData.callAction === 'rejectCall') {
+          this.rejectCall();
+        }
       }
       localStorage.removeItem('callData');
     }
@@ -425,8 +427,19 @@ export class WebRtcService extends ApiService {
       }
 
       // Tutup socket lama jika ada
-      if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
-        this.socket.close();
+      // ✅ FIX: Use socket.connected (Socket.IO API) — the old check used
+      // WebSocket.CLOSED (value 3) which is a native WebSocket constant and
+      // never worked correctly on a Socket.IO socket.
+      if (this.socket?.connected) {
+        // Already connected with this user — skip creating a new socket.
+        // A new socket would cause the server to emit kick-user-testing-demo
+        // to the existing socket, triggering a false-positive kick-out.
+        console.log('Socket already connected — skipping re-initialization');
+        this.listenForNativeEvents();
+        return;
+      }
+      if (this.socket) {
+        this.socket.disconnect();
       }
 
       // Setup user
@@ -434,13 +447,13 @@ export class WebRtcService extends ApiService {
       this.userId = userInfo.family_id ? parseInt(userInfo.family_id, 10) || 0 : 0;
 
       // Connect ke WebSocket
-      this.socket = io('wss://ws.sgeede.com', {
-      // this.socket = io('http://localhost:8091', {
+      // this.socket = io('wss://ws.sgeede.com', {
+      this.socket = io('http://192.168.1.217:8091', {
         query: { uniqueId: userInfo.family_id || 'Public-User' },
       });
 
       console.log(this.socket, "enicencieninceicneicencienciecn");
-      
+
 
       // Register event handlers
       this.socket.on('offer', (offer: any) => this.handleOffer(offer));
@@ -860,6 +873,12 @@ export class WebRtcService extends ApiService {
           if (res.result['status_code'] == 200) {
             var fcm_token = res.result['status_desc'];
             this.getFCMToken().then(token => {
+              // Skip comparison if token could not be determined
+              // (null = iOS FCMTokenReceived timed out or not yet available)
+              if (token === null || token === undefined || token === '') {
+                console.log('FCM token not available — skipping kick-out check');
+                return;
+              }
               if (token != fcm_token) {
                 console.log(this.platform.platforms(), this.platform.platforms().join(', '));
 
@@ -867,10 +886,10 @@ export class WebRtcService extends ApiService {
                 console.log("Is Dekstop", isDesktop);
 
                 if (isDesktop) {
-                  console.log("Your in desktop device", isDesktop);
+                  console.log("You are in desktop device", isDesktop);
                 } else {
-                  this.presentToast('Your about to get kick out from application in 3 second because your account has been login on another device.', 'warning')
-                  console.log('Your about to get kick out from application in 3 second because your account has been login on another device.', 'warning');
+                  this.presentToast('You are about to get kick out from application in 3 second because your account has been login on another device.', 'warning')
+                  console.log('You are about to get kick out from application in 3 second because your account has been login on another device.', 'warning');
                   setTimeout(() => {
                     this.closeSocket();
                     this.storage.clearAllValueFromStorage();
@@ -959,6 +978,37 @@ export class WebRtcService extends ApiService {
         return null;
       }
 
+      // ✅ FIX: On iOS, the AppDelegate dispatches the real Firebase FCM token
+      // via a custom DOM event 'FCMTokenReceived' after mapping the APNs token.
+      // Calling PushNotifications.register() here would return the raw APNs hex
+      // token (different format from the Firebase FCM token stored in Odoo),
+      // causing a false-positive mismatch in handleKickUser.
+      if (Capacitor.getPlatform() === 'ios') {
+        return new Promise<string | null>((resolve) => {
+          // If AppDelegate already fired the event, it stored the token on window
+          const cached = (window as any).__firebaseFCMToken;
+          if (cached) {
+            resolve(cached);
+            return;
+          }
+
+          const handler = (e: Event) => {
+            const token = (e as CustomEvent<string>).detail;
+            (window as any).__firebaseFCMToken = token;  // cache for next call
+            document.removeEventListener('FCMTokenReceived', handler);
+            resolve(token);
+          };
+          document.addEventListener('FCMTokenReceived', handler);
+
+          // Safety timeout — returns null so handleKickUser skips the comparison
+          setTimeout(() => {
+            document.removeEventListener('FCMTokenReceived', handler);
+            resolve(null);
+          }, 5000);
+        });
+      }
+
+      // Android: standard PushNotifications registration flow
       const permission = await PushNotifications.requestPermissions();
       if (permission.receive !== 'granted') {
         return null;
@@ -1110,7 +1160,7 @@ export class WebRtcService extends ApiService {
 
     const answer = await this.peerConnection.createAnswer();
     await this.peerConnection.setLocalDescription(answer);
-    
+
     this.startRecordingWithWebAudio(this.localStream, this.remoteStream)
 
     this.socket.emit('answer', {
@@ -1315,12 +1365,12 @@ export class WebRtcService extends ApiService {
 
   combineStreams(streams: any) {
     const combined = new MediaStream();
-  
+
     streams.forEach((stream: any) => {
       stream.getAudioTracks().forEach((track: any) => combined.addTrack(track));
     });
     console.log(combined)
-  
+
     return combined;
   }
 
@@ -1348,7 +1398,7 @@ export class WebRtcService extends ApiService {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.style.display = 'none';
-      a.href = url; 
+      a.href = url;
       a.download = 'recorded-call.webm';
       document.body.appendChild(a);
       a.click();
@@ -1443,10 +1493,10 @@ export class WebRtcService extends ApiService {
   }
 
   async loadConfig(data: any = false) {
-    let rggData: any =false
+    let rggData: any = false
     let preference: any = false
     this.storage.getValueFromStorage('RGG_CALL_DATA').then(value => {
-      if ( value ) {
+      if (value) {
         rggData = value
       } else {
         rggData = false
@@ -1457,7 +1507,7 @@ export class WebRtcService extends ApiService {
           console.log(preference)
           if (data.fcm_ids.includes(preference.fcm_token_id)) {
 
-            this.mainVmsService.getApi({project_id: data.project_id, fcm_token_id: preference.fcm_token_id}, '/vms/get/current_config').subscribe({
+            this.mainVmsService.getApi({ project_id: data.project_id, fcm_token_id: preference.fcm_token_id }, '/vms/get/current_config').subscribe({
               next: (results) => {
                 console.log(results)
                 if (results.result.status_code === 200) {
@@ -1465,17 +1515,17 @@ export class WebRtcService extends ApiService {
                   Preferences.set({
                     key: 'USER_INFO',
                     value: results.result.response_status.access_token,
-                  }).then(()=>{
-                      this.storage.clearAllValueFromStorage()
-                      let storageData = {
-                        'background': results.result.response_status.background
-                      }
-                      this.storage.setValueToStorage('USESATE_DATA', storageData)
-                      let countryCodeData = results.result.response_status.country_codes.country_code_data
-                      this.storage.setValueToStorage('COUNTRY_CODES_DATA', countryCodeData)
-                      if (rggData) { 
-                        this.storage.setValueToStorage('RGG_CALL_DATA', rggData)
-                      }
+                  }).then(() => {
+                    this.storage.clearAllValueFromStorage()
+                    let storageData = {
+                      'background': results.result.response_status.background
+                    }
+                    this.storage.setValueToStorage('USESATE_DATA', storageData)
+                    let countryCodeData = results.result.response_status.country_codes.country_code_data
+                    this.storage.setValueToStorage('COUNTRY_CODES_DATA', countryCodeData)
+                    if (rggData) {
+                      this.storage.setValueToStorage('RGG_CALL_DATA', rggData)
+                    }
                   });
                   if (this.router.url.includes('home-vms')) {
                     this.mainVmsService.configUpdated$.next();
@@ -1497,29 +1547,30 @@ export class WebRtcService extends ApiService {
 
   maintenanceSocket: any = false;
   async initializeMaintenanceSocket() {
-    try { 
-      this.maintenanceSocket = io('wss://ws.sgeede.com', { 
-        query: { isCheck: true }, 
-      }); 
-      this.maintenanceSocket.on('handle-server-response', (data: any) => this.handleServerResponse(data)); 
-    } 
-    catch (error) { 
-      console.error('Error during socket initialization:', error); 
-    } 
-  } 
-  
-  async checkServerMaintenance() { 
+    try {
+      // this.maintenanceSocket = io('wss://ws.sgeede.com', 
+      this.maintenanceSocket = io('http://192.168.1.217:8091', {
+        query: { isCheck: true },
+      });
+      this.maintenanceSocket.on('handle-server-response', (data: any) => this.handleServerResponse(data));
+    }
+    catch (error) {
+      console.error('Error during socket initialization:', error);
+    }
+  }
+
+  async checkServerMaintenance() {
     if (!this.maintenanceSocket) {
-      await this.initializeMaintenanceSocket() 
-    } 
-    this.maintenanceSocket.emit('check-server-maintenance', {}); 
+      await this.initializeMaintenanceSocket()
+    }
+    this.maintenanceSocket.emit('check-server-maintenance', {});
   }
 
   async handleServerResponse(data: any) {
     let is_maintenance = ((data['is_maintenance'] == 'True') ? this.checkMaintenanceHours(data) : false)
     if (!this.router.url.includes('maintenance-page')) {
       if (is_maintenance) {
-        this.router.navigate(['/maintenance-page'], {state: data})
+        this.router.navigate(['/maintenance-page'], { state: data })
       }
     } else {
       if (!is_maintenance) {

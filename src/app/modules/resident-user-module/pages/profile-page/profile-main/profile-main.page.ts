@@ -3,6 +3,7 @@ import { IonContent } from '@ionic/angular';
 import { Capacitor } from '@capacitor/core';
 import { trigger, style, animate, transition } from '@angular/animations';
 import { PushNotifications, Token } from '@capacitor/push-notifications';
+import { FcmTokenService } from 'src/app/service/fcm-token/fcm-token.service';
 import { Router } from '@angular/router';
 import { Preferences } from '@capacitor/preferences';
 import { Subscription } from 'rxjs';
@@ -195,7 +196,8 @@ export class ProfileMainPage implements OnInit, OnDestroy {
     private router: Router,
     private mainResident: MainApiResidentService,
     private alertController: AlertController,
-    private platform: Platform
+    private platform: Platform,
+    private fcmTokenService: FcmTokenService
   ) {
     const navigation = this.router.getCurrentNavigation();
     const state = navigation?.extras.state as { from: any };
@@ -1115,88 +1117,43 @@ export class ProfileMainPage implements OnInit, OnDestroy {
 
   async getNotificationPermission(familyId: number): Promise<string> {
     try {
-      // Check if PushNotifications is available
       if (typeof PushNotifications === 'undefined') {
         console.warn('PushNotifications not available.');
         return '';
       }
 
-      // Request permissions
       const permission = await PushNotifications.requestPermissions();
       if (permission.receive !== 'granted') {
         console.log('Notification permission not granted');
         return '';
       }
 
-      // Clean up and register
-      PushNotifications.removeAllListeners();
-      PushNotifications.register();
+      // ✅ Use FcmTokenService which correctly returns Firebase FCM token on iOS
+      const token = await this.fcmTokenService.getToken(15000);
+      if (!token) {
+        console.warn('FCM token could not be retrieved');
+        return '';
+      }
 
-      // Return promise for token registration
-      return this.waitForToken(familyId);
+      this.fcmToken = token;
+      console.log('FCM Token received:', token);
+
+      this.mainResident.endpointCustomProcess({
+        previous_family_id: this.familyId,
+        family_id: familyId,
+        fcm_token: token,
+        device_new: Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios' ? 'ios' : 'android'
+      }, '/set/fcm_token').subscribe({
+        next: (response: any) => console.log('FCM token sent to backend:', response),
+        error: (error: any) => console.error('Failed to send FCM token to backend:', error)
+      });
+
+      return token;
     } catch (err) {
       console.error('Push Notification Error:', err);
       return '';
     }
   }
-
-  private waitForToken(familyId: number): Promise<string> {
-    return new Promise((resolve) => {
-      const TIMEOUT_MS = 10000; // Reduced from 15s to 10s
-      
-      const timeout = setTimeout(() => {
-        this.cleanupTokenListeners();
-        console.log('FCM registration timed out');
-        resolve('');
-      }, TIMEOUT_MS);
-
-      const onRegistration = (token: Token) => {
-        this.cleanupTokenListeners();
-        if (token.value) {
-          this.fcmToken = token.value;
-          console.log('FCM Token received:', token.value);
-            
-          // ✅ Send token to backend
-          this.mainResident.endpointCustomProcess({
-            previous_family_id: this.familyId,
-            family_id: familyId,
-            fcm_token: token.value,
-            device_new: Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios' ? 'ios' : 'android'
-          }, '/set/fcm_token').subscribe({
-            next: (response: any) => {
-              console.log('FCM token sent to backend successfully:', response);
-              resolve(token.value); // ✅ PERBAIKAN: resolve dengan token
-            },
-            error: (error) => {
-              console.error('Failed to send FCM token to backend:', error);
-              resolve(token.value); // ✅ Tetap resolve dengan token meski gagal kirim ke backend
-            }
-          });
-          resolve(token.value);
-        } else {
-          resolve('');
-        }
-      };
-
-      const onRegistrationError = (error: any) => {
-        this.cleanupTokenListeners();
-        console.error('Push notification registration error:', error);
-        resolve('');
-      };
-
-      // Add listeners
-      PushNotifications.addListener('registration', onRegistration);
-      PushNotifications.addListener('registrationError', onRegistrationError);
-
-      // Store cleanup function
-      this.cleanupTokenListeners = () => {
-        clearTimeout(timeout);
-        PushNotifications.removeAllListeners();
-      };
-    });
-  }
-
-  private cleanupTokenListeners: () => void = () => {};
 
   getHistoryList() {
     this.isLoading = true;
