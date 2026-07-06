@@ -26,6 +26,9 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Bundle;
+import android.content.SharedPreferences;
+import android.service.notification.StatusBarNotification;
 import android.os.Build;
 import androidx.core.app.NotificationCompat;
 import android.util.Log;
@@ -57,6 +60,7 @@ import com.bumptech.glide.Glide;
 import com.bumptech.glide.request.target.CustomTarget;
 import com.bumptech.glide.request.transition.Transition;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory; // ADD THIS IMPORT
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import android.graphics.drawable.Drawable;
@@ -64,6 +68,8 @@ import java.util.HashMap;
 import java.io.ByteArrayOutputStream;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.drawable.IconCompat;
+import android.os.PowerManager;
+import com.sgeede.focus.security.FocusSecurity;
 
 /**
  * NOTE: There can only be one service in each app that receives FCM messages. If multiple
@@ -109,8 +115,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         // TODO(developer): Handle FCM messages here.
         // Not getting messages here? See why this may be: https://goo.gl/39bRNJ
         Log.e(TAG, "From: " + remoteMessage.getFrom());
+        // NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
         // Check if message contains a data payload.
+        boolean isForeground = FocusSecurity.isAppInForeground();
+        Log.e(TAG, "Check Foreground: " + isForeground);
         if (remoteMessage.getData().size() > 0) {
             Log.e(TAG, "Message data payload: " + remoteMessage.getData());
 
@@ -128,9 +137,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         if (remoteMessage.getData().size() > 0) {
             Log.e(TAG, "Message data payload: " + remoteMessage.getData());
 
-            String callerName = remoteMessage.getData().get("callerName"); // Ambil callerName dari data
+            String callerName = remoteMessage.getData().get("callerName");
 
-            if (remoteMessage.getData().containsKey("type") && remoteMessage.getData().get("type").equals("incoming_call")) {
+            if (remoteMessage.getData().containsKey("type") && remoteMessage.getData().get("type").equals("incoming_call") && !isForeground) {
+                wakeUpScreen(getApplicationContext());
+                Log.e(TAG, "Message data payload incoming_call: " + remoteMessage.getData());
                 Glide.with(this)
                     .asBitmap()
                     .load(remoteMessage.getData().get("imgurl"))
@@ -145,21 +156,12 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         public void onLoadCleared(@Nullable Drawable placeholder) { }
                     });
             } else if (remoteMessage.getData().containsKey("type") && remoteMessage.getData().get("type").equals("notification_tampan_dan_berani")) {
-                Log.e(TAG, "Message data payload: " + remoteMessage.getData());
-                Glide.with(this)
-                    .asBitmap()
-                    .load(remoteMessage.getData().get("imgurl"))
-                    .into(new CustomTarget<Bitmap>() {
-                        @Override
-                        public void onResourceReady(@NonNull Bitmap resource, @Nullable Transition<? super Bitmap> transition) {
-                            sendNotification(callerName, remoteMessage.getData(), resource);
-                            playRingtone();
-                        }
-
-                        @Override
-                        public void onLoadCleared(@Nullable Drawable placeholder) { }
-                    });
+                Log.e(TAG, "Message data payload notification_tampan_dan_berani: " + remoteMessage.getData());
+                wakeUpScreen(getApplicationContext());
+                Bitmap caller = BitmapFactory.decodeResource(getResources(),  R.drawable.ic_stat_ifs360_logo_transparent);
+                sendAppNotification(remoteMessage.getData(), caller);
             } else if (remoteMessage.getData().containsKey("type") && remoteMessage.getData().get("type").equals("call_rejected")) {
+                Log.e(TAG, "Message data payload notification_tampan_dan_berani call_rejected: " + remoteMessage.getData());
                 Glide.with(this)
                     .asBitmap()
                     .load(remoteMessage.getData().get("imgurl"))
@@ -172,9 +174,14 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         @Override
                         public void onLoadCleared(@Nullable Drawable placeholder) { }
                     });
+            } else if (remoteMessage.getData().containsKey("type") && remoteMessage.getData().get("type").equals("vms_call_rejected")) {
+                NotificationManager notificationManager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
+                stopRingtone();
+                notificationManager.cancel(3001);
             }
         }
-
         // Also if you intend on generating your own notifications as a result of a received FCM
         // message, here is where that should be initiated. See sendNotification method below.
     }
@@ -264,6 +271,20 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
+    private void wakeUpScreen(Context context) {
+        PowerManager powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        boolean isScreenOn = powerManager.isInteractive(); // API >= 20
+        if (!isScreenOn) {
+            PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+                PowerManager.FULL_WAKE_LOCK |
+                PowerManager.ACQUIRE_CAUSES_WAKEUP |
+                PowerManager.ON_AFTER_RELEASE,
+                "FocusApp::CallWakeLock"
+            );
+            wakeLock.acquire(3000); // Wake the screen for 3 seconds
+        }
+    }
+
     /**
      * Create and show a simple notification containing the received FCM message.
      *
@@ -311,7 +332,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
         stopRingtone();
-        notificationManager.cancel(3000);
+        notificationManager.cancel(3001);
 
         String channelId = getString(R.string.default_notification_channel_id);
 
@@ -328,6 +349,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             intent.putExtra("receiverName", data.get("receiverName"));
             intent.putExtra("callerName", data.get("callerName"));
             intent.putExtra("callerSocketId", data.get("callerSocketId"));
+            intent.putExtra("unitId", data.get("unitId"));
             PendingIntent fullScreenIntent = PendingIntent.getActivity(
                     this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -338,6 +360,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             acceptIntent.putExtra("receiverName", data.get("receiverName"));
             acceptIntent.putExtra("callerName", data.get("callerName"));
             acceptIntent.putExtra("callerSocketId", data.get("callerSocketId"));
+            acceptIntent.putExtra("unitId", data.get("unitId"));
             PendingIntent acceptPendingIntent = PendingIntent.getActivity(
                     this, 1, acceptIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -348,6 +371,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             rejectIntent.putExtra("receiverName", data.get("receiverName"));
             rejectIntent.putExtra("callerName", data.get("callerName"));
             rejectIntent.putExtra("callerSocketId", data.get("callerSocketId"));
+            rejectIntent.putExtra("unitId", data.get("unitId"));
             PendingIntent rejectPendingIntent = PendingIntent.getActivity(
                     this, 2, rejectIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
@@ -382,11 +406,10 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             }
 
             // Tampilkan notifikasi dengan ID unik
-            notificationManager.notify(3000, notificationBuilder.build());
+            notificationManager.notify(3001, notificationBuilder.build());
             return;
         }
 
-        Log.e("CallActionReceiver", "--------------- whehehehe ");
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -398,6 +421,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         acceptIntent.putExtra("receiverName", data.get("receiverName"));
         acceptIntent.putExtra("callerName", data.get("callerName"));
         acceptIntent.putExtra("callerSocketId", data.get("callerSocketId"));
+        acceptIntent.putExtra("unitId", data.get("unitId"));
         PendingIntent acceptPendingIntent = PendingIntent.getBroadcast(
                 this, 0, acceptIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
 
@@ -406,6 +430,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         rejectIntent.putExtra("receiverName", data.get("receiverName"));
         rejectIntent.putExtra("callerName", data.get("callerName"));
         rejectIntent.putExtra("callerSocketId", data.get("callerSocketId"));
+        rejectIntent.putExtra("unitId", data.get("unitId"));
         PendingIntent rejectPendingIntent = PendingIntent.getBroadcast(
                 this, 1, rejectIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
 
@@ -424,8 +449,10 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                     .setStyle(new NotificationCompat.DecoratedCustomViewStyle())
                     .setCustomContentView(customLayoutSmall)
                     .setCustomBigContentView(customLayout)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setGroup("groupKey_none")
+                    .setGroupSummary(false) // Individual notification
                     .setOngoing(true)
                     .setAutoCancel(false)
                     .setFullScreenIntent(fullScreenIntent, true);
@@ -439,7 +466,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             notificationManager.createNotificationChannel(channel);
         }
 
-        notificationManager.notify(3000, notificationBuilder.build());
+        notificationManager.notify(3001, notificationBuilder.build());
     }
 
     private void showDefaultNotification(String title, String message, Bitmap image) {
@@ -447,7 +474,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
         stopRingtone();
-        notificationManager.cancel(3000);
+        notificationManager.cancel(3001);
         String channelId = getString(R.string.default_notification_channel_id);
 
         // Intent ketika notifikasi diklik
@@ -471,7 +498,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                         .setCustomContentView(customView)
                         .setContentIntent(pendingIntent)
                         .setAutoCancel(true)
-                        .setPriority(NotificationCompat.PRIORITY_HIGH);
+                        .setPriority(NotificationCompat.PRIORITY_MAX);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(channelId,
@@ -480,6 +507,109 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             notificationManager.createNotificationChannel(channel);
         }
 
-        notificationManager.notify(3000, notificationBuilder.build());
+        notificationManager.notify(3001, notificationBuilder.build());
+    }
+
+    private void sendAppNotification(Map<String, String> data, Bitmap callerImage) {
+        Log.e(TAG, "Starting App Notifications");
+        NotificationManager notificationManager =
+            (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
+        String channelId = getString(R.string.default_notification_channel_id);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                channelId,
+                "App Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Notifications for messages");
+            channel.setShowBadge(true);
+            notificationManager.createNotificationChannel(channel);
+        }
+
+        Log.e(TAG, "Title: " + data.get("notification_title"));
+        Log.e(TAG, "Body: " + data.get("notification_body"));
+
+        // Buat Intent untuk membuka aplikasi
+        Intent intent = new Intent(this, MainActivity.class); // Ganti MainActivity dengan Activity utama Anda
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP); // Clear stack dan buka activity di top
+        
+        // Optional: Tambah extra data jika diperlukan
+        intent.putExtra("notification_data", data.get("notification_body"));
+        intent.putExtra("from_notification", true);
+
+        // UNTUK STACKING - Buat summary notification
+        String groupKey = "app_notifications_ifs360"; // Key untuk grouping
+
+        // Buat PendingIntent
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+            this, 
+            0, 
+            intent, 
+            PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        // Generate unique notification ID
+        int notificationId = (int) System.currentTimeMillis(); // Atau bisa pakai Random
+
+        // Get notification count
+        int notificationCount = 1;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            StatusBarNotification[] activeNotifications = notificationManager.getActiveNotifications();
+            notificationCount = 0;
+            for (StatusBarNotification notification : activeNotifications) {
+                if (notification.getId() != 9999 && groupKey.equals(notification.getNotification().getGroup())) {
+                    notificationCount++;
+                }
+            }
+            notificationCount++; // Add current notification
+        } else {
+            // Fallback: get from SharedPreferences
+            SharedPreferences prefs = getSharedPreferences("notification_prefs", MODE_PRIVATE);
+            notificationCount = prefs.getInt("notification_count", 0) + 1;
+            prefs.edit().putInt("notification_count", notificationCount).apply();
+        }
+
+        // Small view
+        RemoteViews smallView = new RemoteViews(getPackageName(), R.layout.notification_layout_small);
+        smallView.setTextViewText(R.id.notif_title, data.get("notification_title"));
+
+        // Big view
+        RemoteViews bigView = new RemoteViews(getPackageName(), R.layout.notification_layout);
+        bigView.setTextViewText(R.id.notif_title, data.get("notification_title"));
+        bigView.setTextViewText(R.id.notif_body, data.get("notification_body"));
+
+        NotificationCompat.Builder notificationBuilder =
+            new NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(R.drawable.ic_stat_ifs360_logo_transparent) // Icon di status bar
+                .setCustomContentView(smallView)
+                .setCustomBigContentView(bigView)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setStyle(new NotificationCompat.DecoratedCustomViewStyle()) // PENTING!
+                .setGroup(groupKey) // PENTING: Set group untuk stacking
+                .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+                .setNumber(notificationCount)
+                .setGroupSummary(false); // Individual notification
+        
+        notificationManager.notify(notificationId, notificationBuilder.build());
+
+        // BUAT SUMMARY NOTIFICATION untuk stacking
+        NotificationCompat.Builder summaryBuilder =
+            new NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(R.drawable.ic_stat_ifs360_logo_transparent)
+                .setContentTitle("App Notifications")
+                .setContentText("You have" + notificationCount + "new messages")
+                .setGroup(groupKey)
+                .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+                .setNumber(notificationCount)
+                .setGroupSummary(true) // PENTING: Ini adalah summary
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent);
+
+        // Kirim summary notification
+        notificationManager.notify(9999, summaryBuilder.build()); // ID unik untuk summary
     }
 }

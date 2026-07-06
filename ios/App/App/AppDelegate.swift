@@ -1,13 +1,17 @@
+import AVFoundation
 import Capacitor
 import Firebase
-import FirebaseMessaging  // ← Tambahkan ini
+import FirebaseMessaging
 import UIKit
 import UserNotifications
+import WebKit
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
+    // Looping audio player for foreground incoming-call ringtone
+    private var audioPlayer: AVAudioPlayer?
 
     func application(
         _ application: UIApplication,
@@ -20,6 +24,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Setup notification categories
         setupNotificationCategories()
 
+        // ✅ Set delegate BEFORE requestAuthorization so notifications arriving
+        // during the permission prompt are not silently dropped
+        UNUserNotificationCenter.current().delegate = self
+
         // ✅ Tambahkan Firebase Messaging delegate
         Messaging.messaging().delegate = self
 
@@ -28,7 +36,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             granted, error in
             if granted {
                 DispatchQueue.main.async {
-                    UNUserNotificationCenter.current().delegate = self
                     application.registerForRemoteNotifications()
                 }
             }
@@ -91,11 +98,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let apnsToken = tokenParts.joined()
         print("📱 APNs Token: \(apnsToken)")
 
-        // // Post ke Capacitor
-        // NotificationCenter.default.post(
-        //     name: .capacitorDidRegisterForRemoteNotifications,
-        //     object: deviceToken
-        // )
+        // ✅ Forward raw APNs token Data to Capacitor (required for JS PushNotifications.register() to resolve)
+        NotificationCenter.default.post(
+            name: .capacitorDidRegisterForRemoteNotifications,
+            object: deviceToken
+        )
 
         // ✅ Request FCM token setelah APNs token di-set
         requestFCMToken()
@@ -121,24 +128,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 print("📱 FCM registration token: \(token)")
                 print("📏 FCM Token length: \(token.count)")
 
-                // Post ke Capacitor
-                NotificationCenter.default.post(
-                    name: .capacitorDidRegisterForRemoteNotifications,
-                    object: token
-                )
-
-                // Post notification untuk JavaScript
-                // DispatchQueue.main.async {
-                //     NotificationCenter.default.post(
-                //         name: NSNotification.Name("FCMTokenReceived"),
-                //         object: token
-                //     )
-                // }
-
                 DispatchQueue.main.async {
-                    if let webView = self.window?.rootViewController?.view.subviews.first(where: {
-                        $0 is WKWebView
-                    }) as? WKWebView {
+                    if let rootView = self.window?.rootViewController?.view,
+                       let webView = self.findWebView(in: rootView) {
                         let javascript = """
                                 document.dispatchEvent(new CustomEvent('FCMTokenReceived', {
                                     detail: '\(token)'
@@ -155,17 +147,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func setupNotificationCategories() {
-        print("this function is call")
         let answerAction = UNNotificationAction(
             identifier: "ANSWER_ACTION",
-            title: "Answer",
-            options: [.foreground]  // opens the app
+            title: "✅ Answer",
+            options: [.foreground]  // opens app
         )
 
         let declineAction = UNNotificationAction(
             identifier: "DECLINE_ACTION",
-            title: "Decline",
-            options: [.destructive]
+            title: "❌ Decline",
+            options: [.destructive, .foreground]  // opens app so JS can emit reject-call
         )
 
         let callCategory = UNNotificationCategory(
@@ -174,66 +165,146 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             intentIdentifiers: [],
             options: [.customDismissAction]
         )
-        print("this function is return", callCategory)
 
         UNUserNotificationCenter.current().setNotificationCategories([callCategory])
+    }
+
+    // MARK: - Ringtone helpers
+    private func playLoopingRingtone() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("⚠️ AVAudioSession setup failed: \(error)")
+        }
+
+        // Use bundled ringtone.caf if available, otherwise fall back to system ringtone (id 1007)
+        if let soundURL = Bundle.main.url(forResource: "ringtone", withExtension: "caf")
+            ?? Bundle.main.url(forResource: "ringtone", withExtension: "mp3") {
+            do {
+                audioPlayer = try AVAudioPlayer(contentsOf: soundURL)
+                audioPlayer?.numberOfLoops = -1  // loop forever
+                audioPlayer?.volume = 1.0
+                audioPlayer?.play()
+                return
+            } catch {
+                print("⚠️ Could not load ringtone file: \(error)")
+            }
+        }
+        // Fallback: repeat system ringtone + vibration every 3 s
+        AudioServicesPlaySystemSound(1007)
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+    }
+
+    private func stopRingtone() {
+        // Stop AVAudioPlayer loop (used when ringtone.caf / ringtone.mp3 is bundled)
+        audioPlayer?.stop()
+        audioPlayer = nil
+        // Note: AudioServicesPlaySystemSound plays once and cannot be stopped — nothing to do here
+    }
+
+    // Recursively find WKWebView in the view hierarchy
+    private func findWebView(in view: UIView) -> WKWebView? {
+        if let wk = view as? WKWebView { return wk }
+        for sub in view.subviews {
+            if let found = findWebView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    // Inject callData into Angular's localStorage so listenForNativeEvents() picks it up
+    private func injectCallData(jsonString: String) {
+        guard let rootView = self.window?.rootViewController?.view,
+              let webView = findWebView(in: rootView) else { return }
+        let escaped = jsonString.replacingOccurrences(of: "'", with: "\\'")  // escape single quotes
+        webView.evaluateJavaScript("localStorage.setItem('callData', '\(escaped)');", completionHandler: nil)
     }
 }
 
 // MARK: - UNUserNotificationCenterDelegate
 extension AppDelegate: UNUserNotificationCenterDelegate {
-    // Handle notification when app is in foreground
+
+    // Called when notification arrives while app is in FOREGROUND
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) ->
-            Void
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        print("🔥 NOTIFICATION RECEIVED willPresent")
         let userInfo = notification.request.content.userInfo
-        print("user info", userInfo)
-        let aps = userInfo["aps"] as? [String: Any]
+        let type = userInfo["type"] as? String ?? ""
 
-        // Cara 1: Ambil dari aps.alert (jika payload APNs)
-        if let alert = aps?["alert"] as? [String: String] {
-            let title = alert["title"] ?? "No Title"
-            let body = alert["body"] ?? "No Body"
-            print("📢 [APS Alert] Title:", title)
-            print("📢 [APS Alert] Body:", body)
+        if type == "incoming_call" {
+            print("📞 Incoming call notification — starting ringtone loop")
+            playLoopingRingtone()
         }
 
-        // Cara 2: Ambil langsung dari content notifikasi
         let content = notification.request.content
-        print("📢 [Content] Title:", content.title)  // "Security"
-        print("📢 [Content] Body:", content.body)  // "Incoming call"
-        completionHandler([.alert, .badge, .sound])
+        print("📢 [willPresent] Title: \(content.title) | Body: \(content.body)")
+
+        if type == "incoming_call" {
+            // For calls: show banner + badge, audio player handles the sound
+            completionHandler([.alert, .badge])
+        } else {
+            // For all other notifications: show banner + badge + system sound
+            completionHandler([.alert, .badge, .sound])
+        }
     }
 
-    // Handle notification tap
+    // Called when user taps the notification or one of its action buttons
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        print("🔥 NOTIFICATION RECEIVED didReceive")
-        let content = response.notification.request.content
-        print("content", content)
-        print("📢 Title dari Alert:", content.title)  // "Security"
-        print("📢 Body dari Alert:", content.body)  // "Incoming call"
+        // Stop any looping ringtone
+        stopRingtone()
+
+        let userInfo = response.notification.request.content.userInfo
         let actionId = response.actionIdentifier
+
+        // Extract call metadata from the data payload
+        let callerName    = userInfo["callerName"]    as? String ?? ""
+        let receiverName  = userInfo["receiverName"]  as? String ?? ""
+        let callerSocketId = userInfo["callerSocketId"] as? String ?? ""
+        let callerId      = userInfo["callerId"]      as? String ?? ""
+        let receiverId    = userInfo["receiverId"]    as? String ?? ""
+        let unitId        = userInfo["unitId"]        as? String ?? ""
+
+        var callAction = ""
         if actionId == "ANSWER_ACTION" {
-            print("📞 Answer pressed")
-            // Notify JS via NotificationCenter or route in WKWebView
+            callAction = "acceptCall"
+            print("📞 Answer button tapped")
         } else if actionId == "DECLINE_ACTION" {
-            print("📞 Decline pressed")
-            // Same here
+            callAction = "rejectCall"
+            print("📞 Decline button tapped")
+        } else {
+            // Plain notification tap (no action button) — open app to incoming call screen
+            callAction = "openDialogCall"
+            print("📞 Notification body tapped")
         }
 
-        // Akses custom data
-        let userInfo = content.userInfo
-        if let callerName = userInfo["callerName"] as? String {
-            print("📢 Caller Name:", callerName)  // "Security"
+        let callData: [[String: String]] = [[
+            "callAction":     callAction,
+            "callerName":     callerName,
+            "receiverName":   receiverName,
+            "callerSocketId": callerSocketId,
+            "callerId":       callerId,
+            "receiverId":     receiverId,
+            "unitId":         unitId
+        ]]
+
+        if let jsonData = try? JSONSerialization.data(withJSONObject: callData, options: []),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+
+            // Store in UserDefaults so the killed-app launch path also works
+            UserDefaults.standard.set(jsonString, forKey: "pendingCallAction")
+
+            // Try to inject immediately (works when app was suspended in background)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.injectCallData(jsonString: jsonString)
+            }
         }
+
         NotificationCenter.default.post(
-            name: NSNotification.Name.init("pushNotificationReceived"), object: response)
+            name: NSNotification.Name("pushNotificationReceived"), object: response)
         completionHandler()
     }
 
@@ -273,15 +344,22 @@ extension AppDelegate: MessagingDelegate {
         // }
 
         DispatchQueue.main.async {
-            if let webView = self.window?.rootViewController?.view.subviews.first(where: {
-                $0 is WKWebView
-            }) as? WKWebView {
+            if let rootView = self.window?.rootViewController?.view,
+               let webView = self.findWebView(in: rootView) {
                 let javascript = """
                         document.dispatchEvent(new CustomEvent('FCMTokenReceived', {
                             detail: '\(token)'
                         }));
                     """
                 webView.evaluateJavaScript(javascript, completionHandler: nil)
+
+                // ✅ Drain any pending call action stored when app was killed
+                if let pending = UserDefaults.standard.string(forKey: "pendingCallAction") {
+                    UserDefaults.standard.removeObject(forKey: "pendingCallAction")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        self.injectCallData(jsonString: pending)
+                    }
+                }
             }
         }
 

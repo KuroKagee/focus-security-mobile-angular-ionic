@@ -157,7 +157,7 @@ export class BillsAndFinesPagePage implements OnInit {
 
   onChangeTypeFamily(event: any) {
     this.familyType = event;
-    if (event === 'Tenants') {
+    if (event === "Member" || event === 'Tenants') {
       this.navButtonsMain = [
         {
           text: 'Fees',

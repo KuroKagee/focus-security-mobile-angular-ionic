@@ -31,16 +31,16 @@ export class PaymentsMainPage implements OnInit {
   onChangeTypeFamily(event: any) {
     this.userRole = event;
     console.log(this.userRole)
-    if (this.userRole === "Member" || this.userRole === "Tenants") {
-      this.longButtondata = [
-        {
-          id: 1,
-          name: 'My Deposit',
-          src: 'assets/icon/resident-icon/payment-manage.png',
-          routeLinkTo: '/deposits-page',
-        },
-      ];
-    }
+    // if (this.userRole === "Member" || this.userRole === "Tenants") {
+    //   this.longButtondata = [
+    //     {
+    //       id: 1,
+    //       name: 'My Deposit',
+    //       src: 'assets/icon/resident-icon/payment-manage.png',
+    //       routeLinkTo: '/deposits-page',
+    //     },
+    //   ];
+    // }
   }
 
 }
